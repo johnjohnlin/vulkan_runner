@@ -8,32 +8,27 @@
 * This code is licensed under the MIT license (MIT) (http://opensource.org/licenses/MIT)
 */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-#include <vector>
-#include <array>
-#include <iostream>
-#include <algorithm>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
 #include <vulkan/vulkan.h>
 #include "VulkanTools.h"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <memory>
+#include <vector>
+using namespace std;
 
 #define DEBUG (!NDEBUG)
-
 #define BUFFER_ELEMENTS 32
-
-#if defined(VK_USE_PLATFORM_ANDROID_KHR)
-#define LOG(...) ((void)__android_log_print(ANDROID_LOG_INFO, "vulkanExample", __VA_ARGS__))
-#else
 #define LOG(...) printf(__VA_ARGS__)
-#endif
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugMessageCallback(
 	VkDebugReportFlagsEXT flags,
@@ -49,8 +44,30 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugMessageCallback(
 	return VK_FALSE;
 }
 
-class VulkanExample
-{
+struct HardwareObject {
+};
+
+struct BufferObject {
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	void destroyBy(VkDevice device) {
+		vkDestroyBuffer(device, buffer, nullptr);
+		vkFreeMemory(device, memory, nullptr);
+	}
+};
+
+struct ImageObject {
+	VkImage image;
+	VkDeviceMemory memory;
+	VkImageView view;
+	void destroyBy(VkDevice device) {
+		vkDestroyImageView(device, view, nullptr);
+		vkDestroyImage(device, image, nullptr);
+		vkFreeMemory(device, memory, nullptr);
+	}
+};
+
+class VulkanExample {
 public:
 	VkInstance instance;
 	VkPhysicalDevice physicalDevice;
@@ -64,17 +81,10 @@ public:
 	VkPipelineLayout pipelineLayout;
 	VkPipeline pipeline;
 	std::vector<VkShaderModule> shaderModules;
-	VkBuffer vertexBuffer, indexBuffer;
-	VkDeviceMemory vertexMemory, indexMemory;
-
-	struct FrameBufferAttachment {
-		VkImage image;
-		VkDeviceMemory memory;
-		VkImageView view;
-	};
+	BufferObject vertexBuffer, indexBuffer;
 	int32_t width, height;
 	VkFramebuffer framebuffer;
-	FrameBufferAttachment colorAttachment, depthAttachment;
+	ImageObject colorAttachment, depthAttachment;
 	VkRenderPass renderPass;
 
 	VkDebugReportCallbackEXT debugReportCallback{};
@@ -271,8 +281,7 @@ public:
 			const VkDeviceSize vertexBufferSize = vertices.size() * sizeof(Vertex);
 			const VkDeviceSize indexBufferSize = indices.size() * sizeof(uint32_t);
 
-			VkBuffer stagingBuffer;
-			VkDeviceMemory stagingMemory;
+			BufferObject stagingBuffer;
 
 			// Command buffer for copy commands (reused)
 			VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(commandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1);
@@ -286,54 +295,54 @@ public:
 				createBuffer(
 					VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-					&stagingBuffer,
-					&stagingMemory,
+					&stagingBuffer.buffer,
+					&stagingBuffer.memory,
 					vertexBufferSize,
 					vertices.data());
 
 				createBuffer(
 					VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					&vertexBuffer,
-					&vertexMemory,
+					&vertexBuffer.buffer,
+					&vertexBuffer.memory,
 					vertexBufferSize);
 
 				VK_CHECK_RESULT(vkBeginCommandBuffer(copyCmd, &cmdBufInfo));
 				VkBufferCopy copyRegion = {};
 				copyRegion.size = vertexBufferSize;
-				vkCmdCopyBuffer(copyCmd, stagingBuffer, vertexBuffer, 1, &copyRegion);
+				vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, vertexBuffer.buffer, 1, &copyRegion);
 				VK_CHECK_RESULT(vkEndCommandBuffer(copyCmd));
 
 				submitWork(copyCmd, queue);
 
-				vkDestroyBuffer(device, stagingBuffer, nullptr);
-				vkFreeMemory(device, stagingMemory, nullptr);
+				vkDestroyBuffer(device, stagingBuffer.buffer, nullptr);
+				vkFreeMemory(device, stagingBuffer.memory, nullptr);
 
 				// Indices
 				createBuffer(
 					VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-					&stagingBuffer,
-					&stagingMemory,
+					&stagingBuffer.buffer,
+					&stagingBuffer.memory,
 					indexBufferSize,
 					indices.data());
 
 				createBuffer(
 					VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					&indexBuffer,
-					&indexMemory,
+					&indexBuffer.buffer,
+					&indexBuffer.memory,
 					indexBufferSize);
 
 				VK_CHECK_RESULT(vkBeginCommandBuffer(copyCmd, &cmdBufInfo));
 				copyRegion.size = indexBufferSize;
-				vkCmdCopyBuffer(copyCmd, stagingBuffer, indexBuffer, 1, &copyRegion);
+				vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, indexBuffer.buffer, 1, &copyRegion);
 				VK_CHECK_RESULT(vkEndCommandBuffer(copyCmd));
 
 				submitWork(copyCmd, queue);
 
-				vkDestroyBuffer(device, stagingBuffer, nullptr);
-				vkFreeMemory(device, stagingMemory, nullptr);
+				vkDestroyBuffer(device, stagingBuffer.buffer, nullptr);
+				vkFreeMemory(device, stagingBuffer.memory, nullptr);
 			}
 		}
 
@@ -630,8 +639,8 @@ public:
 
 			// Render scene
 			VkDeviceSize offsets[1] = { 0 };
-			vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);
-			vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+			vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
 			std::vector<glm::vec3> pos = {
 				glm::vec3(-1.5f, 0.0f, -4.0f),
@@ -794,18 +803,11 @@ public:
 		vkQueueWaitIdle(queue);
 	}
 
-	~VulkanExample()
-	{
-		vkDestroyBuffer(device, vertexBuffer, nullptr);
-		vkFreeMemory(device, vertexMemory, nullptr);
-		vkDestroyBuffer(device, indexBuffer, nullptr);
-		vkFreeMemory(device, indexMemory, nullptr);
-		vkDestroyImageView(device, colorAttachment.view, nullptr);
-		vkDestroyImage(device, colorAttachment.image, nullptr);
-		vkFreeMemory(device, colorAttachment.memory, nullptr);
-		vkDestroyImageView(device, depthAttachment.view, nullptr);
-		vkDestroyImage(device, depthAttachment.image, nullptr);
-		vkFreeMemory(device, depthAttachment.memory, nullptr);
+	~VulkanExample() {
+		vertexBuffer.destroyBy(device);
+		indexBuffer.destroyBy(device);
+		colorAttachment.destroyBy(device);
+		depthAttachment.destroyBy(device);
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -829,7 +831,6 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-	VulkanExample *vulkanExample = new VulkanExample();
-	delete(vulkanExample);
+	auto example = make_unique<VulkanExample>();
 	return 0;
 }
