@@ -44,50 +44,31 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugMessageCallback(
 	return VK_FALSE;
 }
 
-struct HardwareObject {
-};
+struct HardwareObject;
 
 struct BufferObject {
 	VkBuffer buffer;
 	VkDeviceMemory memory;
-	void destroyBy(VkDevice device) {
-		vkDestroyBuffer(device, buffer, nullptr);
-		vkFreeMemory(device, memory, nullptr);
-	}
+	inline void destroyBy(HardwareObject& hw);
 };
 
 struct ImageObject {
 	VkImage image;
 	VkDeviceMemory memory;
 	VkImageView view;
-	void destroyBy(VkDevice device) {
-		vkDestroyImageView(device, view, nullptr);
-		vkDestroyImage(device, image, nullptr);
-		vkFreeMemory(device, memory, nullptr);
-	}
+	inline void destroyBy(HardwareObject& hw);
 };
 
-class VulkanExample {
-public:
+struct HardwareObject {
 	VkInstance instance;
 	VkPhysicalDevice physicalDevice;
 	VkDevice device;
 	uint32_t queueFamilyIndex;
-	VkPipelineCache pipelineCache;
 	VkQueue queue;
 	VkCommandPool commandPool;
-	VkCommandBuffer commandBuffer;
-	VkDescriptorSetLayout descriptorSetLayout;
-	VkPipelineLayout pipelineLayout;
-	VkPipeline pipeline;
-	std::vector<VkShaderModule> shaderModules;
-	BufferObject vertexBuffer, indexBuffer;
-	int32_t width, height;
-	VkFramebuffer framebuffer;
-	ImageObject colorAttachment, depthAttachment;
-	VkRenderPass renderPass;
-
+#if DEBUG
 	VkDebugReportCallbackEXT debugReportCallback{};
+#endif
 
 	uint32_t getMemoryTypeIndex(uint32_t typeBits, VkMemoryPropertyFlags properties) {
 		VkPhysicalDeviceMemoryProperties deviceMemoryProperties;
@@ -103,29 +84,29 @@ public:
 		return 0;
 	}
 
-	VkResult createBuffer(VkBufferUsageFlags usageFlags, VkMemoryPropertyFlags memoryPropertyFlags, VkBuffer *buffer, VkDeviceMemory *memory, VkDeviceSize size, void *data = nullptr)
+	VkResult createBuffer(BufferObject& bufobj, VkBufferUsageFlags usageFlags, VkMemoryPropertyFlags memoryPropertyFlags, VkDeviceSize size, void *data = nullptr)
 	{
 		// Create the buffer handle
 		VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo(usageFlags, size);
 		bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, buffer));
+		VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, &bufobj.buffer));
 
 		// Create the memory backing up the buffer handle
 		VkMemoryRequirements memReqs;
 		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
-		vkGetBufferMemoryRequirements(device, *buffer, &memReqs);
+		vkGetBufferMemoryRequirements(device, bufobj.buffer, &memReqs);
 		memAlloc.allocationSize = memReqs.size;
 		memAlloc.memoryTypeIndex = getMemoryTypeIndex(memReqs.memoryTypeBits, memoryPropertyFlags);
-		VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, memory));
+		VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &bufobj.memory));
 
 		if (data != nullptr) {
 			void *mapped;
-			VK_CHECK_RESULT(vkMapMemory(device, *memory, 0, size, 0, &mapped));
+			VK_CHECK_RESULT(vkMapMemory(device, bufobj.memory, 0, size, 0, &mapped));
 			memcpy(mapped, data, size);
-			vkUnmapMemory(device, *memory);
+			vkUnmapMemory(device, bufobj.memory);
 		}
 
-		VK_CHECK_RESULT(vkBindBufferMemory(device, *buffer, *memory, 0));
+		VK_CHECK_RESULT(vkBindBufferMemory(device, bufobj.buffer, bufobj.memory, 0));
 
 		return VK_SUCCESS;
 	}
@@ -146,8 +127,7 @@ public:
 		vkDestroyFence(device, fence, nullptr);
 	}
 
-	VulkanExample()
-	{
+	void initialize() {
 		LOG("Running headless rendering example\n");
 
 		VkApplicationInfo appInfo = {};
@@ -262,6 +242,54 @@ public:
 		cmdPoolInfo.queueFamilyIndex = queueFamilyIndex;
 		cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolInfo, nullptr, &commandPool));
+	}
+
+	void destroy() {
+		vkDestroyCommandPool(device, commandPool, nullptr);
+		vkDestroyDevice(device, nullptr);
+#if DEBUG
+		if (debugReportCallback) {
+			PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallback = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT"));
+			assert(vkDestroyDebugReportCallback);
+			vkDestroyDebugReportCallback(instance, debugReportCallback, nullptr);
+		}
+#endif
+		vkDestroyInstance(instance, nullptr);
+	}
+};
+
+void BufferObject::destroyBy(HardwareObject& hw) {
+	vkDestroyBuffer(hw.device, buffer, nullptr);
+	vkFreeMemory(hw.device, memory, nullptr);
+}
+
+void ImageObject::destroyBy(HardwareObject& hw) {
+	vkDestroyImageView(hw.device, view, nullptr);
+	vkDestroyImage(hw.device, image, nullptr);
+	vkFreeMemory(hw.device, memory, nullptr);
+}
+
+class VulkanExample {
+public:
+	HardwareObject hardware;
+	VkPipelineCache pipelineCache;
+	VkDescriptorSetLayout descriptorSetLayout;
+	VkPipelineLayout pipelineLayout;
+	VkPipeline pipeline;
+	std::vector<VkShaderModule> shaderModules;
+	BufferObject vertexBuffer, indexBuffer;
+	int32_t width, height;
+	VkFramebuffer framebuffer;
+	ImageObject colorAttachment, depthAttachment;
+	VkRenderPass renderPass;
+
+	VulkanExample()
+	{
+		hardware.initialize();
+		auto device = hardware.device;
+		auto physicalDevice = hardware.physicalDevice;
+		auto queue = hardware.queue;
+		auto commandPool = hardware.commandPool;
 
 		/*
 			Prepare vertex and index buffers
@@ -292,19 +320,17 @@ public:
 			// Copy input data to VRAM using a staging buffer
 			{
 				// Vertices
-				createBuffer(
+				hardware.createBuffer(
+					stagingBuffer,
 					VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-					&stagingBuffer.buffer,
-					&stagingBuffer.memory,
 					vertexBufferSize,
 					vertices.data());
 
-				createBuffer(
+				hardware.createBuffer(
+					vertexBuffer,
 					VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					&vertexBuffer.buffer,
-					&vertexBuffer.memory,
 					vertexBufferSize);
 
 				VK_CHECK_RESULT(vkBeginCommandBuffer(copyCmd, &cmdBufInfo));
@@ -313,25 +339,21 @@ public:
 				vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, vertexBuffer.buffer, 1, &copyRegion);
 				VK_CHECK_RESULT(vkEndCommandBuffer(copyCmd));
 
-				submitWork(copyCmd, queue);
-
-				vkDestroyBuffer(device, stagingBuffer.buffer, nullptr);
-				vkFreeMemory(device, stagingBuffer.memory, nullptr);
+				hardware.submitWork(copyCmd, queue);
+				stagingBuffer.destroyBy(hardware);
 
 				// Indices
-				createBuffer(
+				hardware.createBuffer(
+					stagingBuffer,
 					VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-					&stagingBuffer.buffer,
-					&stagingBuffer.memory,
 					indexBufferSize,
 					indices.data());
 
-				createBuffer(
+				hardware.createBuffer(
+					indexBuffer,
 					VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					&indexBuffer.buffer,
-					&indexBuffer.memory,
 					indexBufferSize);
 
 				VK_CHECK_RESULT(vkBeginCommandBuffer(copyCmd, &cmdBufInfo));
@@ -339,10 +361,8 @@ public:
 				vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, indexBuffer.buffer, 1, &copyRegion);
 				VK_CHECK_RESULT(vkEndCommandBuffer(copyCmd));
 
-				submitWork(copyCmd, queue);
-
-				vkDestroyBuffer(device, stagingBuffer.buffer, nullptr);
-				vkFreeMemory(device, stagingBuffer.memory, nullptr);
+				hardware.submitWork(copyCmd, queue);
+				stagingBuffer.destroyBy(hardware);
 			}
 		}
 
@@ -374,7 +394,7 @@ public:
 			VK_CHECK_RESULT(vkCreateImage(device, &image, nullptr, &colorAttachment.image));
 			vkGetImageMemoryRequirements(device, colorAttachment.image, &memReqs);
 			memAlloc.allocationSize = memReqs.size;
-			memAlloc.memoryTypeIndex = getMemoryTypeIndex(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			memAlloc.memoryTypeIndex = hardware.getMemoryTypeIndex(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 			VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &colorAttachment.memory));
 			VK_CHECK_RESULT(vkBindImageMemory(device, colorAttachment.image, colorAttachment.memory, 0));
 
@@ -397,7 +417,7 @@ public:
 			VK_CHECK_RESULT(vkCreateImage(device, &image, nullptr, &depthAttachment.image));
 			vkGetImageMemoryRequirements(device, depthAttachment.image, &memReqs);
 			memAlloc.allocationSize = memReqs.size;
-			memAlloc.memoryTypeIndex = getMemoryTypeIndex(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			memAlloc.memoryTypeIndex = hardware.getMemoryTypeIndex(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 			VK_CHECK_RESULT(vkAllocateMemory(device, &memAlloc, nullptr, &depthAttachment.memory));
 			VK_CHECK_RESULT(vkBindImageMemory(device, depthAttachment.image, depthAttachment.memory, 0));
 
@@ -658,7 +678,7 @@ public:
 
 			VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
 
-			submitWork(commandBuffer, queue);
+			hardware.submitWork(commandBuffer, queue);
 
 			vkDeviceWaitIdle(device);
 		}
@@ -691,7 +711,7 @@ public:
 			vkGetImageMemoryRequirements(device, dstImage, &memRequirements);
 			memAllocInfo.allocationSize = memRequirements.size;
 			// Memory must be host visible to copy from
-			memAllocInfo.memoryTypeIndex = getMemoryTypeIndex(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+			memAllocInfo.memoryTypeIndex = hardware.getMemoryTypeIndex(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 			VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &dstImageMemory));
 			VK_CHECK_RESULT(vkBindImageMemory(device, dstImage, dstImageMemory, 0));
 
@@ -746,7 +766,7 @@ public:
 
 			VK_CHECK_RESULT(vkEndCommandBuffer(copyCmd));
 
-			submitWork(copyCmd, queue);
+			hardware.submitWork(copyCmd, queue);
 
 			// Get layout of the image (including row pitch)
 			VkImageSubresource subResource{};
@@ -804,29 +824,20 @@ public:
 	}
 
 	~VulkanExample() {
-		vertexBuffer.destroyBy(device);
-		indexBuffer.destroyBy(device);
-		colorAttachment.destroyBy(device);
-		depthAttachment.destroyBy(device);
+		auto device = hardware.device;
+		vertexBuffer.destroyBy(hardware);
+		indexBuffer.destroyBy(hardware);
+		colorAttachment.destroyBy(hardware);
+		depthAttachment.destroyBy(hardware);
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		vkDestroyPipeline(device, pipeline, nullptr);
 		vkDestroyPipelineCache(device, pipelineCache, nullptr);
-		vkDestroyCommandPool(device, commandPool, nullptr);
 		for (auto shadermodule : shaderModules) {
 			vkDestroyShaderModule(device, shadermodule, nullptr);
 		}
-		vkDestroyDevice(device, nullptr);
-#if DEBUG
-		if (debugReportCallback) {
-			PFN_vkDestroyDebugReportCallbackEXT vkDestroyDebugReportCallback = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(vkGetInstanceProcAddr(instance, "vkDestroyDebugReportCallbackEXT"));
-			assert(vkDestroyDebugReportCallback);
-			vkDestroyDebugReportCallback(instance, debugReportCallback, nullptr);
-		}
-#endif
-		vkDestroyInstance(instance, nullptr);
 	}
 };
 
